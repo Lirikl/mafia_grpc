@@ -38,7 +38,7 @@ message ConnectionUpdate {
 message GameCommand {
     string type = 1;
     string vote = 2;
-    int32 SessionID = 3;
+    int64 SessionID = 3;
 }
 
 message GameEvent {

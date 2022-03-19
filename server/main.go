@@ -185,7 +185,7 @@ func game_runner(game *MafiaGame) {
 }
 
 func (s *server) GameSession(stream pb.Mafia_GameSessionServer) error {
-	con := stream.Rcv()
+	con := stream.Recv()
 	s.UsersMutex.Lock()
 	var game *MafiaGame = &s.Sessions[con.SessionID]
 	s.UsersMutex.Unlock()
@@ -193,7 +193,7 @@ func (s *server) GameSession(stream pb.Mafia_GameSessionServer) error {
 	for {
 		//night
 		if game.Roles[con.Name] != "Civ" && game.Status[con.Name] == "alive" {
-			msg := stream.Rcv()
+			msg := stream.Recv()
 			game.Input <- msg
 			if game.Roles[con.Name] == "Sherif" {
 				last_check = <-game.Output[con.Name]
@@ -211,7 +211,7 @@ func (s *server) GameSession(stream pb.Mafia_GameSessionServer) error {
 		//day
 		if game.Status[con.Name] == "alive" {
 			for {
-				msg := stream.Rcv()
+				msg := stream.Recv()
 				game.Input <- msg
 				if msg.Type == "vote" {
 					return nil
