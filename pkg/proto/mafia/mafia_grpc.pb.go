@@ -22,7 +22,6 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type MafiaClient interface {
-	Do(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error)
 	Connect(ctx context.Context, in *ConnectionRequest, opts ...grpc.CallOption) (Mafia_ConnectClient, error)
 	GameSession(ctx context.Context, opts ...grpc.CallOption) (Mafia_GameSessionClient, error)
 }
@@ -33,15 +32,6 @@ type mafiaClient struct {
 
 func NewMafiaClient(cc grpc.ClientConnInterface) MafiaClient {
 	return &mafiaClient{cc}
-}
-
-func (c *mafiaClient) Do(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error) {
-	out := new(Response)
-	err := c.cc.Invoke(ctx, "/mafia.Mafia/Do", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *mafiaClient) Connect(ctx context.Context, in *ConnectionRequest, opts ...grpc.CallOption) (Mafia_ConnectClient, error) {
@@ -111,7 +101,6 @@ func (x *mafiaGameSessionClient) Recv() (*GameEvent, error) {
 // All implementations must embed UnimplementedMafiaServer
 // for forward compatibility
 type MafiaServer interface {
-	Do(context.Context, *Request) (*Response, error)
 	Connect(*ConnectionRequest, Mafia_ConnectServer) error
 	GameSession(Mafia_GameSessionServer) error
 	mustEmbedUnimplementedMafiaServer()
@@ -121,9 +110,6 @@ type MafiaServer interface {
 type UnimplementedMafiaServer struct {
 }
 
-func (UnimplementedMafiaServer) Do(context.Context, *Request) (*Response, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Do not implemented")
-}
 func (UnimplementedMafiaServer) Connect(*ConnectionRequest, Mafia_ConnectServer) error {
 	return status.Errorf(codes.Unimplemented, "method Connect not implemented")
 }
@@ -141,24 +127,6 @@ type UnsafeMafiaServer interface {
 
 func RegisterMafiaServer(s grpc.ServiceRegistrar, srv MafiaServer) {
 	s.RegisterService(&Mafia_ServiceDesc, srv)
-}
-
-func _Mafia_Do_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Request)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(MafiaServer).Do(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/mafia.Mafia/Do",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MafiaServer).Do(ctx, req.(*Request))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _Mafia_Connect_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -214,12 +182,7 @@ func (x *mafiaGameSessionServer) Recv() (*GameCommand, error) {
 var Mafia_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "mafia.Mafia",
 	HandlerType: (*MafiaServer)(nil),
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "Do",
-			Handler:    _Mafia_Do_Handler,
-		},
-	},
+	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Connect",

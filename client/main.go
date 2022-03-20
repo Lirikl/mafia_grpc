@@ -238,10 +238,25 @@ func main() {
 	client := pb.NewMafiaClient(conn)
 	go reading()
 	for {
+		fmt.Println("Register name with /name <name>")
 		ctx := context.Background()
 		name := <-command_chan
-		name = strings.Fields(name)[1]
-		stream, _ := client.Connect(ctx, &pb.ConnectionRequest{Name: name, Connect: pb.ConnectionStatus_Connect})
+		txt := strings.Fields(name)
+		if len(txt) != 2 || txt[0] != "/name" {
+			fmt.Println("Wrong command")
+			continue
+		}
+		name = txt[1]
+		stream, err := client.Connect(ctx, &pb.ConnectionRequest{Name: name, Connect: pb.ConnectionStatus_Connect})
+		if err != nil {
+			fmt.Println("Name already taken")
+			continue
+		}
+		_, err = stream.Recv()
+		if err != nil {
+			fmt.Println("Name already taken")
+			continue
+		}
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {

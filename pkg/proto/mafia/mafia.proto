@@ -11,6 +11,7 @@ enum ConnectionStatus {
     Disconnect = 1;
     None = 2;
     Start = 3;
+    Bad = 4;
 }
 
 message ConnectionRequest {

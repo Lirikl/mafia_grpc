@@ -39,17 +39,19 @@ type server struct {
 	Users        []string
 	Sessions     []MafiaGame
 	Channel      map[string]chan pb.ConnectionUpdate
-	WaitingCount uint32
+	WaitingCount int32
 }
 
 type ConnectMsg struct {
 	id int
 }
 
-var civ_cnt int = 2
-var maf_cnt int = 1
-var sher_cnt int = 1
-var all_cnt = 4
+const (
+	civ_cnt  = 2
+	maf_cnt  = 1
+	sher_cnt = 1
+	all_cnt  = 4
+)
 
 func get_keys(m *map[string]bool) []string {
 	keys := make([]string, 0)
@@ -62,9 +64,9 @@ func get_keys(m *map[string]bool) []string {
 func max(numbers *map[string]int) string {
 	var maxNumber int
 	maxKey := make([]string, 0)
-	var mK string
-	for mK, maxNumber = range *numbers {
-		maxKey = append(maxKey, mK)
+	//var mK string
+	for _, maxNumber = range *numbers {
+		//maxKey = append(maxKey, mK)
 		break
 	}
 	for k, v := range *numbers {
@@ -158,6 +160,7 @@ func day_round(game *MafiaGame) {
 		game.SherifCount -= 1
 	}
 
+	game.AllCount -= 1
 	res := int64(0)
 	if MafiaWon(game) {
 		res = 1
@@ -230,7 +233,7 @@ func (s *server) GameSession(stream pb.Mafia_GameSessionServer) error {
 }
 
 func (s *server) init_game() MafiaGame {
-	atomic.AddUint32(&s.WaitingCount, -uint32(all_cnt))
+	atomic.AddInt32(&s.WaitingCount, -all_cnt)
 	mf := MafiaGame{AllCount: all_cnt, MafiaCount: maf_cnt, SherifCount: sher_cnt}
 	mf.SherifVote = make(map[string]int)
 	mf.MafiaVote = make(map[string]int)
@@ -298,15 +301,17 @@ func (s *server) Connect(req *pb.ConnectionRequest, stream pb.Mafia_ConnectServe
 		s.UsersMutex.Unlock()
 		return status.Error(codes.InvalidArgument, "Name already in use")
 	}
+
 	channel := make(chan pb.ConnectionUpdate, 10)
 
 	s.Channel[req.Name] = channel
 	s.Names[req.Name] = true
 	s.Users = append(s.Users, req.Name)
+	stream.Send(&pb.ConnectionUpdate{Connect: pb.ConnectionStatus_Bad})
 	s.UsersMutex.Unlock()
 
-	atomic.AddUint32(&s.WaitingCount, 1)
-	if atomic.LoadUint32(&s.WaitingCount) == uint32(all_cnt) {
+	atomic.AddInt32(&s.WaitingCount, 1)
+	if atomic.LoadInt32(&s.WaitingCount) == all_cnt {
 		mf := s.init_game()
 		sz := len(s.Sessions)
 		s.Sessions = append(s.Sessions, mf)
@@ -316,7 +321,6 @@ func (s *server) Connect(req *pb.ConnectionRequest, stream pb.Mafia_ConnectServe
 		go game_runner(&mf)
 	}
 	for {
-
 		select {
 		case <-timer:
 			//<-timer
@@ -325,6 +329,7 @@ func (s *server) Connect(req *pb.ConnectionRequest, stream pb.Mafia_ConnectServe
 			s.UsersMutex.Unlock()
 			if err := stream.Send(&pb.ConnectionUpdate{Connect: pb.ConnectionStatus_None, Users: users}); err != nil {
 				s.UsersMutex.Lock()
+				atomic.AddInt32(&s.WaitingCount, -1)
 				s.DeleteName(req.Name)
 				delete(s.Names, req.Name)
 				s.UsersMutex.Unlock()
