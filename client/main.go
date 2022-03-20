@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
+	"sync"
 
 	pb "github.com/Lirikl/mafia/pkg/proto/mafia"
 	"google.golang.org/grpc"
@@ -19,12 +19,15 @@ var chat_chan chan string = make(chan string, 100)
 var command_chan chan string = make(chan string, 100)
 
 func reading() {
-	str, _ := reader.ReadString('\n')
-	str = str[:len(str)-1]
-	if str[0] == '/' {
-		command_chan <- str
-	} else {
-		chat_chan <- str
+	for {
+		str, _ := reader.ReadString('\n')
+		str = str[:len(str)-1]
+		fmt.Println("read ", str)
+		if str[0] == '/' {
+			command_chan <- str
+		} else {
+			chat_chan <- str
+		}
 	}
 }
 
@@ -38,89 +41,187 @@ func CheckEnd(msg *pb.GameEvent) bool {
 	return msg.Winner > 0
 }
 
-func RunCiv(game pb.Mafia_GameSessionClient, id int64) {
-	for {
-		msg, _ := game.Recv()
-		if CheckEnd(msg) {
-			break
-		}
-		var text []string
-		for {
-			text = strings.Fields(<-command_chan)
-			if len(text) != 2 || text[0] != "/vote" {
-				continue
-			}
-			break
-		}
-		game.Send(&pb.GameCommand{Type: "vote", Vote: text[1], SessionID: id})
-		msg, _ = game.Recv()
-		if CheckEnd(msg) {
-			break
+func print_status(m *map[string]bool) {
+	alive := make([]string, 0)
+	dead := make([]string, 0)
+	for k, v := range *m {
+		if v {
+			alive = append(alive, k)
+		} else {
+			dead = append(dead, k)
 		}
 	}
+	fmt.Println("alive players: ", alive)
+	fmt.Println("dead players: ", dead)
 }
 
-func RunMafia(game pb.Mafia_GameSessionClient, id int64) {
+func RunCiv(game pb.Mafia_GameSessionClient, id int64, name string, alive map[string]bool) {
 	for {
-		var text []string
-		for {
-			text = strings.Fields(<-command_chan)
-			if len(text) != 2 || text[0] != "/vote" {
-				continue
-			}
-			break
-		}
-		game.Send(&pb.GameCommand{Type: "vote", Vote: text[1], SessionID: id})
+
+		fmt.Println("night falls on the city")
+		//print_status(&alive)
 		msg, _ := game.Recv()
+
+		fmt.Println("city awakens")
+		fmt.Println(msg.Victim, " was killed by mafia ")
+		if msg.Victim == name {
+			fmt.Println(msg.Victim, "You are dead")
+		}
+		alive[msg.Victim] = false
+		print_status(&alive)
 		if CheckEnd(msg) {
 			break
 		}
 
-		for {
-			text = strings.Fields(<-command_chan)
-			if len(text) != 2 || text[0] != "/vote" {
-				continue
-			}
-			break
-		}
-		game.Send(&pb.GameCommand{Type: "vote", Vote: text[1], SessionID: id})
-		msg, _ = game.Recv()
-		if CheckEnd(msg) {
-			break
-		}
-	}
-}
-
-func RunSherif(game pb.Mafia_GameSessionClient, id int64) {
-	//supect := ""
-	is_mafia := false
-	for {
 		var text []string
-		for {
-			text = strings.Fields(<-command_chan)
-			if len(text) != 2 || text[0] != "/vote" {
-				continue
-			}
-			break
-		}
-		game.Send(&pb.GameCommand{Type: "vote", Vote: text[1], SessionID: id})
-		msg, _ := game.Recv()
-		if CheckEnd(msg) {
-			break
-		}
-
-		for {
-			text = strings.Fields(<-command_chan)
-			if len(text) == 1 && text[0] == "/reveal" && is_mafia {
-				game.Send(&pb.GameCommand{Type: "reveal", SessionID: id})
-				continue
-			}
-			if len(text) == 2 && text[0] == "/vote" {
+		if alive[name] {
+			for {
+				text = strings.Fields(<-command_chan)
+				if len(text) != 2 || text[0] != "/vote" || !alive[text[1]] {
+					fmt.Println("Wrong command")
+					continue
+				}
+				fmt.Println("Vote accepted")
 				break
 			}
+			game.Send(&pb.GameCommand{Type: "vote", Vote: text[1], SessionID: id, Name: name})
 		}
-		game.Send(&pb.GameCommand{Type: "vote", Vote: text[1], SessionID: id})
 		msg, _ = game.Recv()
+		fmt.Println(msg.Victim, " was killed by vote ")
+		if msg.Victim == name {
+			fmt.Println(msg.Victim, "You are dead")
+
+		}
+		alive[msg.Victim] = false
+		if CheckEnd(msg) {
+			break
+		}
+	}
+}
+
+func RunMafia(game pb.Mafia_GameSessionClient, id int64, name string, alive map[string]bool) {
+	for {
+		fmt.Println("night falls on the city")
+		print_status(&alive)
+		var text []string
+		if alive[name] {
+			for {
+				text = strings.Fields(<-command_chan)
+				if len(text) != 2 || text[0] != "/vote" || !alive[text[1]] {
+					fmt.Println("Wrong command")
+					continue
+				}
+				fmt.Println("Vote accepted")
+				break
+			}
+			game.Send(&pb.GameCommand{Type: "vote", Vote: text[1], SessionID: id, Name: name})
+		}
+		msg, _ := game.Recv()
+
+		fmt.Println("city awakens")
+		fmt.Println(msg.Victim, " was killed by mafia ")
+		if msg.Victim == name {
+			fmt.Println(msg.Victim, "You are dead")
+
+		}
+		alive[msg.Victim] = false
+
+		print_status(&alive)
+		if CheckEnd(msg) {
+			break
+		}
+		if alive[name] {
+			for {
+				text = strings.Fields(<-command_chan)
+				if len(text) != 2 || text[0] != "/vote" || !alive[text[1]] {
+					fmt.Println("Wrong command")
+					continue
+				}
+				fmt.Println("Vote accepted")
+				break
+			}
+			game.Send(&pb.GameCommand{Type: "vote", Vote: text[1], SessionID: id, Name: name})
+		}
+		msg, _ = game.Recv()
+		fmt.Println(msg.Victim, " was killed by vote ")
+		if msg.Victim == name {
+			fmt.Println(msg.Victim, "You are dead")
+
+		}
+		alive[msg.Victim] = false
+		if CheckEnd(msg) {
+			break
+		}
+	}
+}
+
+func RunSherif(game pb.Mafia_GameSessionClient, id int64, name string, alive map[string]bool) {
+	//supect := ""
+	is_mafia := false
+
+	for {
+		fmt.Println("night falls on the city")
+		print_status(&alive)
+		var text []string
+		//fmt.Println("start")
+		if alive[name] {
+			for {
+				text = strings.Fields(<-command_chan)
+				//fmt.Println(len(text), text)
+				if len(text) != 2 || text[0] != "/vote" || !alive[text[1]] {
+					fmt.Println("Wrong command")
+					continue
+				}
+				fmt.Println("Vote accepted")
+				break
+			}
+			game.Send(&pb.GameCommand{Type: "vote", Vote: text[1], SessionID: id, Name: name})
+
+			msg, _ := game.Recv()
+			if msg.CheckResult {
+				fmt.Println(msg.Suspect, "is mafia")
+			} else {
+				fmt.Println(msg.Suspect, "is not mafia")
+			}
+		}
+		msg, _ := game.Recv()
+		fmt.Println(msg.Victim, " was killed by mafia ")
+		if msg.Victim == name {
+			fmt.Println(msg.Victim, "You are dead")
+
+		}
+		alive[msg.Victim] = false
+		print_status(&alive)
+		if CheckEnd(msg) {
+			break
+		}
+
+		fmt.Println("city awakens")
+		if alive[name] {
+			for {
+				text = strings.Fields(<-command_chan)
+				if len(text) == 1 && text[0] == "/reveal" && is_mafia {
+					game.Send(&pb.GameCommand{Type: "reveal", SessionID: id, Name: name})
+					continue
+				}
+				if len(text) == 2 && text[0] == "/vote" && alive[text[1]] {
+					fmt.Println("Vote accepted")
+					break
+				}
+				fmt.Println("Wrong command")
+			}
+			game.Send(&pb.GameCommand{Type: "vote", Vote: text[1], SessionID: id, Name: name})
+		}
+		msg, err := game.Recv()
+		if err != nil {
+			fmt.Println(err)
+		}
+		//fmt.Println(msg)
+		fmt.Println(msg.Victim, " was killed by vote ")
+		if msg.Victim == name {
+			fmt.Println(msg.Victim, "You are dead")
+		}
+		alive[msg.Victim] = false
 		if CheckEnd(msg) {
 			break
 		}
@@ -135,36 +236,41 @@ func main() {
 	}
 	defer conn.Close()
 	client := pb.NewMafiaClient(conn)
-	request := &pb.Request{Message: "This is a test"}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	response, err := client.Do(ctx, request)
-	if err != nil {
-		log.Fatalln(err)
-	}
 	go reading()
-	ctx = context.Background()
-	name := <-command_chan
-	name = strings.Fields(name)[1]
-	stream, err := client.Connect(ctx, &pb.ConnectionRequest{Name: name, Connect: pb.ConnectionStatus_Connect})
-	go func() {
-		for {
-			in, _ := stream.Recv()
-			if in.Connect == pb.ConnectionStatus_Start {
-				role := in.Role
-				game, _ := client.GameSession(ctx)
-				game.Send(&pb.GameCommand{SessionID: in.SessionID})
+	for {
+		ctx := context.Background()
+		name := <-command_chan
+		name = strings.Fields(name)[1]
+		stream, _ := client.Connect(ctx, &pb.ConnectionRequest{Name: name, Connect: pb.ConnectionStatus_Connect})
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
 
-				switch role {
-				case "Civ":
-					RunCiv(game, in.SessionID)
-				case "Mafia":
-					RunMafia(game, in.SessionID)
-				case "Sherif":
-					RunMafia(game, in.SessionID)
+			for {
+				in, _ := stream.Recv()
+				if in.Connect == pb.ConnectionStatus_Start {
+					fmt.Println("Start session as ", in.Role, "!!!")
+					role := in.Role
+					game, _ := client.GameSession(ctx)
+					game.Send(&pb.GameCommand{SessionID: in.SessionID, Name: name})
+					m := make(map[string]bool)
+					for _, n := range in.Users {
+						m[n] = true
+					}
+					fmt.Println("players: ", in.Users)
+					switch role {
+					case "Civ":
+						RunCiv(game, in.SessionID, name, m)
+					case "Mafia":
+						RunMafia(game, in.SessionID, name, m)
+					case "Sherif":
+						RunSherif(game, in.SessionID, name, m)
+					}
+					wg.Done()
+					return
 				}
 			}
-		}
-	}()
-	log.Println("Response:", response.GetMessage())
+		}()
+		wg.Wait()
+	}
 }

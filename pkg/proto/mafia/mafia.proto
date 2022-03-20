@@ -2,15 +2,8 @@ syntax = "proto3";
 package mafia;
 option go_package = "github.com/Lirikl/mafia/pkg/proto/mafia";
 service Mafia {
-    rpc Do(Request) returns (Response) {}
     rpc Connect(ConnectionRequest) returns (stream ConnectionUpdate)  {}
     rpc GameSession(stream GameCommand) returns (stream GameEvent) {} 
-}
-message Request {
-    string message =1;
-}
-message Response {
-    string message =1;
 }
 
 enum ConnectionStatus {
@@ -39,6 +32,7 @@ message GameCommand {
     string type = 1;
     string vote = 2;
     int64 SessionID = 3;
+    string name = 4;
 }
 
 message GameEvent {

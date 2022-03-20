@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"math/rand"
@@ -23,6 +22,7 @@ type MafiaGame struct {
 	Day        bool
 	MafiaVote  map[string]int
 	SherifVote map[string]int
+	Names      []string
 
 	MafiaCount  int
 	SherifCount int
@@ -38,7 +38,7 @@ type server struct {
 	Names        map[string]bool
 	Users        []string
 	Sessions     []MafiaGame
-	Channel      map[string]chan ConnectMsg
+	Channel      map[string]chan pb.ConnectionUpdate
 	WaitingCount uint32
 }
 
@@ -46,16 +46,10 @@ type ConnectMsg struct {
 	id int
 }
 
-var civ_cnt int = 3
+var civ_cnt int = 2
 var maf_cnt int = 1
 var sher_cnt int = 1
-var all_cnt = 5
-
-func (s *server) Do(ctx context.Context, request *pb.Request) (*pb.Response, error) {
-	log.Println(fmt.Sprintf("Request: %s", request.GetMessage()))
-	return &pb.Response{Message: fmt.Sprintf("Reversed string %s",
-		stringReverse(request.GetMessage()))}, nil
-}
+var all_cnt = 4
 
 func get_keys(m *map[string]bool) []string {
 	keys := make([]string, 0)
@@ -89,8 +83,12 @@ func night_round(game *MafiaGame) {
 	game.MafiaVote = make(map[string]int)
 	game.SherifVote = make(map[string]int)
 	cnt := 0
+	fmt.Println("start night")
 	for cnt != game.MafiaCount+game.SherifCount {
 		msg := <-game.Input
+		fmt.Println("step")
+
+		fmt.Println(msg)
 		if game.Status[msg.Name] == "ghost" {
 			continue
 		}
@@ -102,7 +100,17 @@ func night_round(game *MafiaGame) {
 			game.SherifVote[msg.Vote] += 1
 			cnt += 1
 		}
+		fmt.Println(cnt)
 
+	}
+	if game.SherifCount > 0 {
+		name := max(&game.SherifVote)
+		role_ans := (game.Roles[name] == "Mafia")
+		for player, role := range game.Roles {
+			if role == "Sherif" && game.Status[player] == "alive" {
+				game.Output[player] <- pb.GameEvent{Suspect: name, CheckResult: role_ans}
+			}
+		}
 	}
 
 	victim := max(&game.MafiaVote)
@@ -115,16 +123,7 @@ func night_round(game *MafiaGame) {
 	}
 	game.AllCount -= 1
 
-	if game.SherifCount > 0 {
-		name := max(&game.SherifVote)
-		role_ans := (game.Roles[name] == "Mafia")
-		for player, role := range game.Roles {
-			if role == "Sherif" && game.Status[player] == "alive" {
-				game.Output[player] <- pb.GameEvent{Suspect: name, CheckResult: role_ans}
-			}
-		}
-	}
-	res := 0
+	res := int64(0)
 	if MafiaWon(game) {
 		res = 1
 	}
@@ -141,6 +140,8 @@ func day_round(game *MafiaGame) {
 
 	game.DayVote = make(map[string]int)
 	cnt := 0
+
+	fmt.Println("start day")
 	for cnt != game.AllCount {
 		msg := <-game.Input
 		if game.Status[msg.Name] == "ghost" {
@@ -157,7 +158,7 @@ func day_round(game *MafiaGame) {
 		game.SherifCount -= 1
 	}
 
-	res := 0
+	res := int64(0)
 	if MafiaWon(game) {
 		res = 1
 	}
@@ -185,7 +186,7 @@ func game_runner(game *MafiaGame) {
 }
 
 func (s *server) GameSession(stream pb.Mafia_GameSessionServer) error {
-	con := stream.Recv()
+	con, _ := stream.Recv()
 	s.UsersMutex.Lock()
 	var game *MafiaGame = &s.Sessions[con.SessionID]
 	s.UsersMutex.Unlock()
@@ -193,50 +194,58 @@ func (s *server) GameSession(stream pb.Mafia_GameSessionServer) error {
 	for {
 		//night
 		if game.Roles[con.Name] != "Civ" && game.Status[con.Name] == "alive" {
-			msg := stream.Recv()
-			game.Input <- msg
+			msg, _ := stream.Recv()
+			game.Input <- *msg
 			if game.Roles[con.Name] == "Sherif" {
 				last_check = <-game.Output[con.Name]
-				stream.Send(last_check)
+				fmt.Println("send check")
+				stream.Send(&last_check)
 			}
 		}
+		fmt.Println("get res", con.Name)
 		round_res := <-game.Output[con.Name]
-		if round_res.Winner {
-			round_res
-		}
-		stream.Send(round_res)
+
+		fmt.Println("send res", con.Name)
+		stream.Send(&round_res)
 		if round_res.Winner > 0 {
 			return nil
 		}
 		//day
+		fmt.Println(game.Status[con.Name], con.Name)
 		if game.Status[con.Name] == "alive" {
 			for {
-				msg := stream.Recv()
-				game.Input <- msg
+				msg, _ := stream.Recv()
+				game.Input <- *msg
 				if msg.Type == "vote" {
-					return nil
+					break
 				}
 			}
 		}
 		round_res = <-game.Output[con.Name]
-		stream.Send(round_res)
+		stream.Send(&round_res)
 		if round_res.Winner > 0 {
 			return nil
 		}
-
 	}
 }
 
 func (s *server) init_game() MafiaGame {
+	atomic.AddUint32(&s.WaitingCount, -uint32(all_cnt))
 	mf := MafiaGame{AllCount: all_cnt, MafiaCount: maf_cnt, SherifCount: sher_cnt}
 	mf.SherifVote = make(map[string]int)
 	mf.MafiaVote = make(map[string]int)
 	mf.DayVote = make(map[string]int)
 	mf.Input = make(chan pb.GameCommand, 15)
 	mf.Output = make(map[string]chan pb.GameEvent)
+	mf.Roles = make(map[string]string)
+	mf.Status = make(map[string]string)
 
 	s.UsersMutex.Lock()
 	names := s.Users[:all_cnt]
+	mf.Names = names
+	for _, v := range mf.Names {
+		delete(s.Names, v)
+	}
 	s.Users = s.Users[all_cnt:]
 	s.UsersMutex.Unlock()
 	roles := make([]string, 0)
@@ -257,33 +266,40 @@ func (s *server) init_game() MafiaGame {
 		mf.Roles[v] = roles[i]
 		mf.Status[v] = "alive"
 	}
-
+	return mf
 	//for i := 0; i < all_cnt; i++ {
 	//	mf.Output[i] = make(chan pb.GameEvent, 15)
 	//}
 }
 
 func (s *server) DeleteName(name string) {
-	s.UsersMutex.Lock()
-	var i int
 	for i, v := range s.Users {
 		if v == name {
+			s.Users[i], s.Users[len(s.Users)-1] = s.Users[len(s.Users)-1], s.Users[i]
+			s.Users = s.Users[:len(s.Users)-1]
 			break
 		}
 	}
-	s.Users[i], s.Users[len(s.Users)-1] = s.Users[len(s.Users)-1], s.Users[i]
-	s.UsersMutex.Unlock()
 }
 
 func (s *server) Connect(req *pb.ConnectionRequest, stream pb.Mafia_ConnectServer) error {
 	//req, err := stream.Recv()
+	fmt.Println(string(req.Name))
 	timer := time.Tick(time.Second)
 	s.UsersMutex.Lock()
+	if s.Names == nil {
+		s.Names = make(map[string]bool)
+	}
+
+	if s.Channel == nil {
+		s.Channel = make(map[string]chan pb.ConnectionUpdate)
+	}
 	if s.Names[req.Name] {
 		s.UsersMutex.Unlock()
 		return status.Error(codes.InvalidArgument, "Name already in use")
 	}
-	channel := make(chan ConnectMsg, 10)
+	channel := make(chan pb.ConnectionUpdate, 10)
+
 	s.Channel[req.Name] = channel
 	s.Names[req.Name] = true
 	s.Users = append(s.Users, req.Name)
@@ -294,9 +310,10 @@ func (s *server) Connect(req *pb.ConnectionRequest, stream pb.Mafia_ConnectServe
 		mf := s.init_game()
 		sz := len(s.Sessions)
 		s.Sessions = append(s.Sessions, mf)
-		for k, _ := range mf.Roles {
-			s.Channel[k] <- ConnectMsg{id: sz}
+		for k, v := range mf.Roles {
+			s.Channel[k] <- pb.ConnectionUpdate{SessionID: int64(sz), Role: v}
 		}
+		go game_runner(&mf)
 	}
 	for {
 
@@ -308,13 +325,15 @@ func (s *server) Connect(req *pb.ConnectionRequest, stream pb.Mafia_ConnectServe
 			s.UsersMutex.Unlock()
 			if err := stream.Send(&pb.ConnectionUpdate{Connect: pb.ConnectionStatus_None, Users: users}); err != nil {
 				s.UsersMutex.Lock()
+				s.DeleteName(req.Name)
 				delete(s.Names, req.Name)
 				s.UsersMutex.Unlock()
 				return err
 			}
 		case msg := <-channel:
-			ses := msg.id
-			stream.Send(&pb.ConnectionUpdate{Connect: pb.ConnectionStatus_Start, Users: s.Sessions[ses], SessionID: ses})
+			fmt.Println("start ses")
+			stream.Send(&pb.ConnectionUpdate{Connect: pb.ConnectionStatus_Start, Users: s.Sessions[msg.SessionID].Names, SessionID: msg.SessionID, Role: msg.Role})
+			return nil
 			//s.GameSession(s)
 		}
 
